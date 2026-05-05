@@ -1,0 +1,128 @@
+# Disclude — Source Code Obfuscation Scan
+#
+# Detects obfuscation techniques used to make malicious code look benign:
+# Supports: C, Rust, Python, TypeScript, JavaScript, Bash/Shell
+# Docs: https://github.com/disclude-io/disclude-rs
+#
+# ── Usage ────────────────────────────────────────────────────────────────────
+#
+#   jobs:
+#     disclude:
+#       uses: disclude-io/.github/.github/workflows/disclude-scan.yml@v1
+#       permissions:
+#         actions: read
+#         contents: read
+#         security-events: write
+#
+# ── Inputs ───────────────────────────────────────────────────────────────────
+#
+#   path            Directory to scan (default: '.')
+#   severity        Minimum severity to report: info | warn | critical (default: warn)
+#   version         Disclude version to install (default: latest)
+#   diff            Git ref to compare against — only report findings introduced
+#                   since that ref, e.g. 'main' or a tag. Omit for a full scan.
+#   extra-args      Any additional flags to pass to `disclude scan`, e.g.
+#                   '--no-ast'
+#   fail-on-findings  Exit the job with a failure if any findings are reported.
+#                   Useful for blocking PRs. (default: false)
+#
+# Note: the `permissions` block must be set in the CALLER workflow, not here,
+# because GitHub evaluates permissions in the caller's context.
+
+name: Disclude Obfuscation Scan
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: 'Directory to scan'
+        default: '.'
+        required: false
+        type: string
+      severity:
+        description: 'Minimum severity to report: info, warn, or critical'
+        default: 'warn'
+        required: false
+        type: string
+      version:
+        description: 'Disclude version to install (e.g. "1.2.0" or "latest")'
+        default: 'latest'
+        required: false
+        type: string
+      diff:
+        description: 'Git ref to diff against — only report findings introduced since this ref'
+        default: ''
+        required: false
+        type: string
+      extra-args:
+        description: 'Additional flags passed verbatim to `disclude scan`'
+        default: ''
+        required: false
+        type: string
+      fail-on-findings:
+        description: 'Fail the job if any findings are reported at or above the severity threshold'
+        default: false
+        required: false
+        type: boolean
+
+jobs:
+  disclude:
+    name: Disclude Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history is required when using --diff against a git ref.
+          fetch-depth: ${{ inputs.diff != '' && 0 || 1 }}
+
+      - name: Install Disclude
+        run: |
+          if [ "${{ inputs.version }}" = "latest" ]; then
+            pip install --quiet disclude
+          else
+            pip install --quiet "disclude==${{ inputs.version }}"
+          fi
+
+      - name: Run Disclude scan
+        id: scan
+        # disclude writes SARIF to stdout with --format sarif.
+        # We tee to both the SARIF file and stderr so the raw output is
+        # visible in the Actions log alongside the structured results.
+        # continue-on-error is always true here so the SARIF upload step
+        # below always runs even when findings are present; the optional
+        # fail-on-findings gate is applied in the next step.
+        run: |
+          disclude scan "${{ inputs.path }}" \
+            --format sarif \
+            --severity "${{ inputs.severity }}" \
+            ${{ inputs.diff != '' && format('--diff {0}', inputs.diff) || '' }} \
+            ${{ inputs.extra-args }} \
+            | tee disclude-results.sarif
+        continue-on-error: true
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: disclude-results.sarif
+          # Unique category label; visible in the Security → Code scanning tab.
+          category: disclude
+
+      - name: Fail if findings reported
+        # Only applied when the caller opts in. Runs after the upload so that
+        # results appear in the Security tab regardless of job outcome.
+        if: ${{ inputs.fail-on-findings }}
+        run: |
+          count=$(python3 - <<'EOF'
+          import json, sys
+          data = json.load(open("disclude-results.sarif"))
+          total = sum(len(run.get("results", [])) for run in data.get("runs", []))
+          print(total)
+          EOF
+          )
+          if [ "$count" -gt 0 ]; then
+            echo "::error::Disclude found $count finding(s). Review the Security → Code scanning tab."
+            exit 1
+          fi
+          echo "No findings at severity '${{ inputs.severity }}' or above."
