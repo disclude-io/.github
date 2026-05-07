@@ -6,9 +6,24 @@
 #
 # ── Usage ────────────────────────────────────────────────────────────────────
 #
+#   Basic:
+#
 #   jobs:
 #     disclude:
 #       uses: disclude-io/.github/.github/workflows/disclude-scan.yml@main
+#       permissions:
+#         actions: read
+#         contents: read
+#         security-events: write
+#
+#   With LLM review (demotes false positives before upload):
+#
+#   jobs:
+#     disclude:
+#       uses: disclude-io/.github/.github/workflows/disclude-scan.yml@main
+#       secrets: inherit        # passes ANTHROPIC_API_KEY (or OPENAI_API_KEY / OLLAMA_API_KEY)
+#       with:
+#         llm: true
 #       permissions:
 #         actions: read
 #         contents: read
@@ -25,6 +40,40 @@
 #                   '--no-ast'
 #   fail-on-findings  Exit the job with a failure if any findings are reported.
 #                   Useful for blocking PRs. (default: false)
+#
+#   llm             Enable LLM-assisted review of findings. The LLM re-evaluates
+#                   each finding and demotes false positives to info severity before
+#                   the SARIF is uploaded. (default: false)
+#   llm-provider    Provider to use: anthropic | openai | ollama.
+#                   Auto-detected from whichever API key secret is present
+#                   (checked in that order). Default provider is Anthropic.
+#   llm-model       Model to use. Defaults per provider:
+#                     anthropic → claude-haiku-4-5
+#                     openai    → gpt-4o-mini
+#                     ollama    → llama3.2
+#   llm-base-url    Override the provider's API base URL (useful for self-hosted
+#                   Ollama or an OpenAI-compatible proxy).
+#
+# ── Secrets ──────────────────────────────────────────────────────────────────
+#
+#   ANTHROPIC_API_KEY   Required when using the Anthropic provider.
+#   OPENAI_API_KEY      Required when using the OpenAI provider.
+#   OLLAMA_API_KEY      Required when using the Ollama provider.
+#
+#   Pass secrets to this workflow via `secrets: inherit` in the calling job,
+#   or map them explicitly. Only the secret for the selected provider needs to
+#   be present. Example:
+#
+#   jobs:
+#     disclude:
+#       uses: disclude-io/.github/.github/workflows/disclude-scan.yml@main
+#       secrets: inherit
+#       with:
+#         llm: true
+#       permissions:
+#         actions: read
+#         contents: read
+#         security-events: write
 #
 # Note: the `permissions` block must be set in the CALLER workflow, not here,
 # because GitHub evaluates permissions in the caller's context.
@@ -64,6 +113,36 @@ on:
         default: false
         required: false
         type: boolean
+      llm:
+        description: 'Enable LLM-assisted review — demotes false positives before upload'
+        default: false
+        required: false
+        type: boolean
+      llm-provider:
+        description: 'LLM provider: anthropic, openai, or ollama (auto-detected from env if omitted)'
+        default: ''
+        required: false
+        type: string
+      llm-model:
+        description: 'Override the default model for the selected provider'
+        default: ''
+        required: false
+        type: string
+      llm-base-url:
+        description: 'Override the API base URL (e.g. for a self-hosted Ollama endpoint)'
+        default: ''
+        required: false
+        type: string
+    secrets:
+      ANTHROPIC_API_KEY:
+        description: 'Anthropic API key — required when using the Anthropic provider'
+        required: false
+      OPENAI_API_KEY:
+        description: 'OpenAI API key — required when using the OpenAI provider'
+        required: false
+      OLLAMA_API_KEY:
+        description: 'Ollama API key — required when using the Ollama provider'
+        required: false
 
 jobs:
   disclude:
@@ -94,13 +173,28 @@ jobs:
           SCAN_SEVERITY: ${{ inputs.severity }}
           SCAN_DIFF: ${{ inputs.diff }}
           SCAN_EXTRA: ${{ inputs.extra-args }}
+          LLM_ENABLED: ${{ inputs.llm }}
+          LLM_PROVIDER: ${{ inputs.llm-provider }}
+          LLM_MODEL: ${{ inputs.llm-model }}
+          LLM_BASE_URL: ${{ inputs.llm-base-url }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
         run: |
           diff_flag=
           [ -n "$SCAN_DIFF" ] && diff_flag="--diff $SCAN_DIFF"
+          llm_flags=
+          if [ "$LLM_ENABLED" = "true" ]; then
+            llm_flags="--llm"
+            [ -n "$LLM_PROVIDER" ] && llm_flags="$llm_flags --llm-provider $LLM_PROVIDER"
+            [ -n "$LLM_MODEL" ]    && llm_flags="$llm_flags --llm-model $LLM_MODEL"
+            [ -n "$LLM_BASE_URL" ] && llm_flags="$llm_flags --llm-base-url $LLM_BASE_URL"
+          fi
           disclude scan "$SCAN_PATH" \
             --format sarif \
             --severity "$SCAN_SEVERITY" \
             $diff_flag \
+            $llm_flags \
             $SCAN_EXTRA \
             > disclude-results.sarif
         continue-on-error: true
