@@ -8,7 +8,7 @@
 #
 #   jobs:
 #     disclude:
-#       uses: disclude-io/.github/.github/workflows/disclude-scan.yml@v1
+#       uses: disclude-io/.github/.github/workflows/disclude-scan.yml@main
 #       permissions:
 #         actions: read
 #         contents: read
@@ -87,23 +87,48 @@ jobs:
 
       - name: Run Disclude scan
         id: scan
-        # disclude writes SARIF to stdout with --format sarif.
-        # We tee to both the SARIF file and stderr so the raw output is
-        # visible in the Actions log alongside the structured results.
-        # continue-on-error is always true here so the SARIF upload step
-        # below always runs even when findings are present; the optional
-        # fail-on-findings gate is applied in the next step.
+        # continue-on-error lets the upload step always run even when findings
+        # are present; the optional fail-on-findings gate is applied after.
+        env:
+          SCAN_PATH: ${{ inputs.path }}
+          SCAN_SEVERITY: ${{ inputs.severity }}
+          SCAN_DIFF: ${{ inputs.diff }}
+          SCAN_EXTRA: ${{ inputs.extra-args }}
         run: |
-          disclude scan "${{ inputs.path }}" \
+          diff_flag=
+          [ -n "$SCAN_DIFF" ] && diff_flag="--diff $SCAN_DIFF"
+          disclude scan "$SCAN_PATH" \
             --format sarif \
-            --severity "${{ inputs.severity }}" \
-            ${{ inputs.diff != '' && format('--diff {0}', inputs.diff) || '' }} \
-            ${{ inputs.extra-args }} \
-            | tee disclude-results.sarif
+            --severity "$SCAN_SEVERITY" \
+            $diff_flag \
+            $SCAN_EXTRA \
+            > disclude-results.sarif
         continue-on-error: true
 
+      - name: Inspect SARIF
+        run: |
+          echo "=== file size ==="
+          wc -c disclude-results.sarif
+          echo "=== findings ==="
+          python3 - <<'EOF'
+          import json, sys
+          try:
+              data = json.load(open("disclude-results.sarif"))
+          except Exception as e:
+              print(f"SARIF parse error: {e}")
+              sys.exit(1)
+          total = sum(len(r.get("results", [])) for r in data.get("runs", []))
+          print(f"{total} finding(s) across {len(data.get('runs', []))} run(s)")
+          for run in data.get("runs", []):
+              for result in run.get("results", []):
+                  loc = result.get("locations", [{}])[0]
+                  uri = loc.get("physicalLocation", {}).get("artifactLocation", {}).get("uri", "?")
+                  line = loc.get("physicalLocation", {}).get("region", {}).get("startLine", "?")
+                  print(f"  {result.get('ruleId', '?')}  {uri}:{line}  {result.get('message', {}).get('text', '')[:80]}")
+          EOF
+
       - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: disclude-results.sarif
           # Unique category label; visible in the Security → Code scanning tab.
