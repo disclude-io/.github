@@ -206,8 +206,10 @@ jobs:
           echo "=== findings ==="
           python3 - <<'EOF'
           import json, os, sys
+          EMPTY_SARIF = {"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "disclude", "rules": []}}, "results": []}]}
           if os.path.getsize("disclude-results.sarif") == 0:
               print("0 finding(s)")
+              json.dump(EMPTY_SARIF, open("disclude-results.sarif", "w"))
               sys.exit(0)
           try:
               data = json.load(open("disclude-results.sarif"))
@@ -225,7 +227,6 @@ jobs:
           EOF
 
       - name: Upload SARIF to GitHub Code Scanning
-        if: ${{ hashFiles('disclude-results.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: disclude-results.sarif
