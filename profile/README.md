@@ -5,26 +5,26 @@ Scan source code for signs of hidden intent and obfuscation, including Unicode a
 ## GitHub Action YAML configuration:
 
 ```
-  jobs:
-    disclude:
-      uses: disclude-io/.github/.github/workflows/disclude-scan.yml@main
-      permissions:
-        actions: read
-        contents: read
-        security-events: write
+jobs:
+  disclude:
+    uses: disclude-io/.github/.github/workflows/disclude-scan.yml@main
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
 ```
 
 ## GitHub Action YAML configuration With LLM review:
 
 ```
-  jobs:
-    disclude:
-      uses: disclude-io/.github/.github/workflows/disclude-scan.yml@main
-      secrets: inherit      # passes ANTHROPIC_API_KEY (or OPENAI_API_KEY / OLLAMA_API_KEY)
-      with:
-        llm: true
-      permissions:
-        actions: read
-        contents: read
-        security-events: write
+jobs:
+  disclude:
+    uses: disclude-io/.github/.github/workflows/disclude-scan.yml@main
+    secrets: inherit      # passes ANTHROPIC_API_KEY (or OPENAI_API_KEY / OLLAMA_API_KEY)
+    with:
+      llm: true
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
 ```
